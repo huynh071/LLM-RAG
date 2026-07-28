@@ -71,4 +71,4 @@ Answer:"""
     return response.json()["message"]["content"]
 
 # Test it
-print(rag_query("What payment methods are acceptable?"))
+print(rag_query("How can I call for help?"))
