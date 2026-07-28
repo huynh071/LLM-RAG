@@ -4,6 +4,20 @@ import numpy as np
 import openai
 import requests
 
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+OLLAMA_BASE_URL = os.getenv(
+    "OLLAMA_BASE_URL",
+    "http://127.0.0.1:11434",
+)
+
+OLLAMA_MODEL = os.getenv(
+    "OLLAMA_MODEL",
+    "qwen3:0.6b",
+)
 
 # Step 1: Prepare documents
 documents = [
@@ -44,16 +58,17 @@ Answer:"""
 
     # Generate response
     response = requests.post(
-        "http://127.0.0.1:11434/v1/chat/completions",
+        f"{OLLAMA_BASE_URL}/api/chat",
         json={
-            "model": "qwen3.6",
+            "model": OLLAMA_MODEL,
             "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
             "max_tokens": 1000,
             "temperature": 0.2,
         },
     )
 
-    return response.json()["choices"][0]["message"]["content"]
+    return response.json()["message"]["content"]
 
 # Test it
 print(rag_query("What payment methods are acceptable?"))
