@@ -1,7 +1,6 @@
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
-import openai
 import requests
 
 import os
