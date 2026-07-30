@@ -1,10 +1,16 @@
+
+import os
+
+
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 import requests
 
-import os
 from dotenv import load_dotenv
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 
 load_dotenv()
 
@@ -35,14 +41,26 @@ dimension = embeddings.shape[1]
 index = faiss.IndexFlatL2(dimension)
 index.add(np.array(embeddings))
 
+app = FastAPI(title="RAG API")
+
+
+class ChatRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=4000)
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    sources: list[str]
+
+
 # Step 4: Retrieval function
-def retrieve(query, k=2):
+def retrieve(query: str, k: int = 2) -> list[str]:
     query_embedding = model.encode([query])
-    distances, indices = index.search(query_embedding, k)
+    _, indices = index.search(query_embedding, k)
     return [documents[i] for i in indices[0]]
 
 # Step 5: RAG function
-def rag_query(question):
+def rag_query(question: str) -> tuple[str, list[str]]:
     # Retrieve relevant docs
     context = retrieve(question)
     # Create prompt
@@ -67,7 +85,24 @@ Answer:"""
         },
     )
 
-    return response.json()["message"]["content"]
+    return response.json()["message"]["content"], context
 
-# Test it
-print(rag_query("How can I call for help?"))
+@app.get("/api/health")
+def health():
+    return {"status": "healthy"}
+
+@app.post("/api/chat", response_model=ChatResponse)
+def chat(request: ChatRequest):
+    try:
+        answer, sources = rag_query(request.prompt)
+        return ChatResponse(answer=answer, sources=sources)
+    except requests.RequestException as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Ollama request failed: {exc}",
+        ) from exc
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Ollama returned an unexpected response.",
+        ) from exc

@@ -27,4 +27,4 @@ COPY --chown=app:app simple_RAG.py ./
 
 USER app
 
-CMD ["python", "simple_RAG.py"]
+CMD ["uvicorn", "simple_RAG:app", "--host", "0.0.0.0", "--port", "8000"]

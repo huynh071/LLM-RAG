@@ -7,7 +7,9 @@ requires-python = ">=3.12"
 dependencies = [
     "dotenv>=0.9.9",
     "faiss-cpu>=1.14.3",
+    "fastapi>=0.141.1",
     "numpy>=2.5.1",
     "requests>=2.34.2",
     "sentence-transformers>=5.6.1",
+    "uvicorn[standard]>=0.52.0",
 ]

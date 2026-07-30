@@ -34,10 +34,34 @@ services:
       HF_HOME: /home/app/.cache/huggingface
     volumes:
       - huggingface_cache:/home/app/.cache/huggingface
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 5m
     depends_on:
       ollama-pull:
         condition: service_completed_successfully
     restart: "no"
+  
+  web:
+    build:
+      context: ./web
+    ports:
+      - "8080:80"
+    depends_on:
+      rag:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   ollama_data:
