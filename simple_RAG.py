@@ -1,20 +1,17 @@
 
 import os
-
-
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 import requests
-
 from dotenv import load_dotenv
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from read_pdf import read_pdf
 from pathlib import Path
-
 load_dotenv()
+
+
 
 OLLAMA_BASE_URL = os.getenv(
     "OLLAMA_BASE_URL",
@@ -38,7 +35,6 @@ DEFAULT_PDF = PROJECT_ROOT / "resources" / "file1.pdf"
 # ]
 
 documents = [read_pdf(DEFAULT_PDF)]
-
 
 # Step 2: Create embeddings
 model = SentenceTransformer('all-MiniLM-L6-v2')  # 384-dim embeddings
