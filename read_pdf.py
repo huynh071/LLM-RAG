@@ -8,9 +8,14 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
 )
 from sentence_transformers import SentenceTransformer
+import faiss
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+DEFAULT_PDF = PROJECT_ROOT / "resources" / "file1.pdf"
 
 # TODO: compare the performance with docling
-def read_pdf(pdf_path: Path) -> str:
+def convert_to_markdown(pdf_path: Path) -> str:
     """Return the contents of a PDF as Markdown text."""
     if not pdf_path.is_file():
         raise FileNotFoundError(f"PDF file not found: {pdf_path}")
@@ -111,23 +116,20 @@ def build_index(chunks):
         show_progress_bar=True,
     )
 
-    return model, np.asarray(embeddings)
-
-def return_chunking(pdf_path: Path):
-    markdown = read_pdf(pdf_path)
-    chunks = chunk_markdown(
-        markdown=markdown,
-        chunk_size=1000,
-        chunk_overlap=150,
+    embeddings = np.ascontiguousarray(
+        embeddings,
+        dtype=np.float32,
     )
-    embedding_model, embedding_matrix = build_index(chunks)
-    return embedding_model, embedding_matrix
 
+    index = faiss.IndexFlatIP(embeddings.shape[1])
+    index.add(embeddings)
+
+    return model, index
 
 def retrieve(
     question: str,
     chunks,
-    embedding_matrix: np.ndarray,
+    index,
     model: SentenceTransformer,
     top_k: int = 3,
 ):
@@ -141,21 +143,47 @@ def retrieve(
         normalize_embeddings=True,
     )
 
-    # Because vectors are normalised, their dot product is
-    # equivalent to cosine similarity.
-    scores = embedding_matrix @ query_embedding
+    query_embedding = np.ascontiguousarray(
+        query_embedding.reshape(1, -1),
+        dtype=np.float32,
+    )
+
+    top_k = min(top_k, index.ntotal)
+    scores, indices = index.search(query_embedding, top_k)
 
     top_indices = np.argsort(scores)[::-1][:top_k]
 
     results = []
 
-    for index in top_indices:
-        results.append(
-            {
-                "score": float(scores[index]),
-                "content": chunks[index].page_content,
-                "metadata": chunks[index].metadata,
-            }
-        )
+    for score, chunk_index in zip(scores[0], indices[0]):
+        if chunk_index < 0:
+            continue
+
+        results.append({
+            "score": float(score),
+            "content": chunks[chunk_index].page_content,
+            "metadata": chunks[chunk_index].metadata,
+        })
 
     return results
+
+def retrieved_chunks(question: str):
+    markdown = convert_to_markdown(DEFAULT_PDF)
+    chunks = chunk_markdown(
+        markdown=markdown,
+        chunk_size=1000,
+        chunk_overlap=150,
+    )
+
+    embedding_model, index = build_index(chunks)
+
+    retrieved_chunks = retrieve(
+        question=question,
+        chunks=chunks,
+        index=index,
+        model=embedding_model,
+        top_k=3,
+    )
+
+    return retrieved_chunks
+
