@@ -1,138 +1,111 @@
 # LLM-RAG
 
-A small, fully containerized Retrieval-Augmented Generation (RAG) application.
-It provides a browser-based chat interface, retrieves relevant knowledge with
-Sentence Transformers and FAISS, and asks a local Ollama model to generate the
-answer.
+LLM-RAG is a small, local Retrieval-Augmented Generation (RAG) application for
+asking questions about a PDF. It converts the document to Markdown, retrieves
+the most relevant passages with Sentence Transformers and FAISS, and gives
+those passages to an Ollama model to generate an answer.
 
-The default stack runs on CPU and is designed to work on macOS, Windows, and
-Linux through Docker Compose.
+The complete application runs with Docker Compose and provides a browser-based
+chat interface at `http://localhost:8080`. The language model, embedding model,
+and document content remain local to the machine running the containers.
 
 ## Features
 
-- Responsive chat-style web interface with light and dark themes
-- Nginx static-file server and reverse proxy
-- FastAPI JSON API with request and response validation
-- Local embeddings from `sentence-transformers/all-MiniLM-L6-v2`
-- In-memory FAISS similarity search
-- Local answer generation through Ollama
-- Automatic Ollama model download during initial startup
+- Browser chat interface served by Nginx
+- FastAPI JSON API
+- PDF-to-Markdown extraction with MarkItDown
+- Heading-aware and overlapping text chunks
+- Local embeddings with `sentence-transformers/all-MiniLM-L6-v2`
+- In-memory cosine-similarity search with FAISS
+- Local answer generation with Ollama
 - Persistent Docker volumes for downloaded Ollama and Hugging Face models
-- No Ollama or RAG API ports exposed directly to the host
+- Configurable Ollama generation model
+
+## How it works
+
+```text
+resources/file1.pdf
+        |
+        v
+MarkItDown PDF extraction
+        |
+        v
+Markdown header split + 1,000-character chunks (150-character overlap)
+        |
+        v
+all-MiniLM-L6-v2 normalized embeddings
+        |
+        v
+FAISS inner-product search (up to 3 chunks)
+        |
+        v
+Question + retrieved context -> Ollama -> answer
+```
+
+For each chat request, the backend:
+
+1. Reads `resources/file1.pdf` and converts it to Markdown.
+2. Splits the Markdown by headings and then into smaller overlapping chunks.
+3. Embeds the chunks and builds an in-memory FAISS index.
+4. Retrieves up to three chunks most similar to the question.
+5. Instructs Ollama to answer using only those chunks.
+6. Returns the generated answer and the retrieved chunk text to the browser.
+
+The index is currently rebuilt for every question. This keeps the example
+simple and reprocesses the configured document on each request, but it is less
+efficient than building and persisting the index once.
 
 ## Architecture
 
 ```text
-Browser
-   |
-   | http://localhost:8080
-   v
-+---------------------------+
-| web                       |
-| Nginx                     |
-|                           |
-| /          -> static GUI  |
-| /api/*     -> rag:8000    |
-+-------------+-------------+
-              |
-              | Docker network
-              v
-+---------------------------+
-| rag                       |
-| FastAPI + FAISS           |
-| Sentence Transformers     |
-+-------------+-------------+
-              |
-              | http://ollama:11434
-              v
-+---------------------------+
-| ollama                    |
-| Local language model      |
-+---------------------------+
+Browser -> http://localhost:8080
+             |
+             v
+        Nginx (`web`)
+          |       |
+          |       +-- serves HTML, CSS, and JavaScript
+          |
+          +-- /api/* -> FastAPI (`rag`:8000)
+                            |
+                            +-- PDF + Sentence Transformers + FAISS
+                            |
+                            +-- Ollama (`ollama`:11434)
 ```
 
-Docker Compose creates an internal network for the application. Service names
-act as DNS names on that network, so Nginx reaches the API at `rag:8000`, and
-the RAG API reaches Ollama at `ollama:11434`.
-
-Only the Nginx port is published:
-
-```text
-Host port 8080 -> web container port 80
-```
-
-The browser must use `/api/chat`; it cannot resolve Docker-only hostnames such
-as `rag` or `ollama`.
-
-## Services
-
-| Service | Purpose | Lifecycle |
-| --- | --- | --- |
-| `web` | Serves HTML, CSS, and JavaScript through Nginx and proxies `/api/*` to FastAPI | Long-running |
-| `rag` | Embeds questions, retrieves knowledge with FAISS, and calls Ollama | Long-running |
-| `ollama` | Hosts the local language model API | Long-running |
-| `ollama-pull` | Downloads the configured model after Ollama becomes healthy | Runs once, then exits successfully |
-
-The `web` service waits for the `rag` health check. The `rag` service waits for
-`ollama-pull`, and `ollama-pull` waits for Ollama to become healthy.
-
-## Technology stack
-
-### Backend
-
-- Python 3.12
-- FastAPI and Uvicorn
-- Pydantic
-- Sentence Transformers
-- FAISS CPU
-- NumPy
-- Requests
-
-### Model runtime
-
-- Ollama
-- Default model: `qwen3:0.6b`
-- Default embedding model: `sentence-transformers/all-MiniLM-L6-v2`
-
-### Frontend
-
-- HTML
-- CSS
-- Vanilla JavaScript
-- Nginx
+Only port `8080` is published to the host. FastAPI and Ollama communicate on
+the internal Compose network.
 
 ## Project structure
 
 ```text
 LLM-RAG/
-├── .dockerignore          # Files excluded from the backend build context
-├── .env.example           # Example model configuration
-├── compose.yaml           # Complete multi-container application
-├── Dockerfile             # RAG/FastAPI image
-├── pyproject.toml         # Python project and dependencies
-├── README.md
-├── simple_RAG.py          # Retrieval pipeline and FastAPI endpoints
-├── uv.lock                # Locked Python dependency versions
+├── .env.example           # Optional Ollama model configuration
+├── compose.yaml           # Web, RAG API, Ollama, and model-pull services
+├── Dockerfile             # Python/FastAPI backend image
+├── pyproject.toml         # Python metadata and dependencies
+├── read_pdf.py            # PDF extraction, chunking, embedding, and retrieval
+├── resources/
+│   └── file1.pdf          # Default knowledge document
+├── simple_RAG.py          # FastAPI endpoints and Ollama prompt
+├── uv.lock                # Locked Python dependencies
 └── web/
-    ├── Dockerfile         # Nginx frontend image
-    ├── app.js             # Chat behavior and API calls
-    ├── index.html         # Application structure
-    ├── nginx.conf         # Static hosting and /api reverse proxy
-    └── styles.css         # Responsive light/dark design
+    ├── Dockerfile
+    ├── app.js
+    ├── index.html
+    ├── nginx.conf
+    └── styles.css
 ```
 
 ## Prerequisites
 
-You need:
+For the recommended setup, install:
 
-- Git
-- Docker with the Compose v2 plugin
-- An internet connection for the first build and model downloads
-- Enough free disk space for Docker images, Python packages, the embedding
-  model, and the selected Ollama model
-- At least 8 GB of system memory recommended for the default small model
+- Docker Desktop, or Docker Engine with the Compose v2 plugin
+- Git, if cloning the repository
+- An internet connection for the initial image, dependency, and model downloads
+- Enough free memory and disk space for the selected Ollama model
 
-Verify the installation:
+Verify Docker is ready:
 
 ```sh
 docker --version
@@ -140,203 +113,246 @@ docker compose version
 docker info
 ```
 
-The command used by this project is `docker compose` with a space. The older
-standalone `docker-compose` command is not recommended.
+Use `docker compose` with a space; the older `docker-compose` command is not
+required.
 
-## Platform setup
+## Quick start with Docker
 
-### macOS
-
-1. Install
-   [Docker Desktop for Mac](https://docs.docker.com/desktop/setup/install/mac-install/).
-   Choose the Apple silicon or Intel download that matches the Mac.
-2. Start Docker Desktop and wait until the Docker engine reports that it is
-   running.
-3. Open Terminal and verify Docker:
-
-   ```sh
-   docker --version
-   docker compose version
-   docker info
-   ```
-
-4. Continue with [Run the project](#run-the-project).
-
-The current Compose configuration runs Ollama inside Docker without Apple GPU
-acceleration. It works on CPU, but generation can be slower than native Ollama
-on Apple silicon.
-
-### Windows 10 or Windows 11
-
-1. Install
-   [Docker Desktop for Windows](https://docs.docker.com/desktop/setup/install/windows-install/).
-2. Use the WSL 2 backend and Linux containers. This project builds Linux
-   container images.
-3. Start Docker Desktop and wait for the engine to become ready.
-4. Open PowerShell and verify Docker:
-
-   ```powershell
-   docker --version
-   docker compose version
-   docker info
-   ```
-
-5. Continue with [Run the project](#run-the-project).
-
-The commands in this README work in PowerShell. They also work in a WSL 2
-terminal when Docker Desktop WSL integration is enabled. For better bind-mount
-performance in a WSL workflow, keep the repository in the Linux filesystem,
-for example under `~/projects`, rather than under `/mnt/c`.
-
-If WSL needs updating, run this from an administrator PowerShell:
-
-```powershell
-wsl --update
-```
-
-### Linux
-
-Install Docker Engine for the Linux distribution and include the Docker
-Compose plugin. Use Docker's
-[official Engine installation instructions](https://docs.docker.com/engine/install/)
-instead of an unofficial or legacy Compose package.
-
-For Ubuntu, the official Docker repository provides these packages:
-
-```sh
-sudo apt install docker-ce docker-ce-cli containerd.io \
-  docker-buildx-plugin docker-compose-plugin
-```
-
-Start and verify Docker:
-
-```sh
-sudo systemctl enable --now docker
-sudo docker run --rm hello-world
-sudo docker compose version
-```
-
-If the user account is configured to access Docker without `sudo`, use the
-commands in the rest of this README exactly as written. Otherwise, prefix
-Docker commands with `sudo`, for example:
-
-```sh
-sudo docker compose up --build
-```
-
-## Run the project
-
-### 1. Clone the repository
-
-macOS, Linux, WSL, or Git Bash:
+### 1. Get the project
 
 ```sh
 git clone https://github.com/huynh071/LLM-RAG.git
 cd LLM-RAG
 ```
 
-PowerShell:
+If the project is already downloaded, open a terminal in the directory that
+contains `compose.yaml`.
 
-```powershell
-git clone https://github.com/huynh071/LLM-RAG.git
-Set-Location LLM-RAG
-```
+### 2. Choose the Ollama model (optional)
 
-If the repository is already downloaded, open a terminal in its root
-directory. The directory must contain `compose.yaml`.
+The default model is `qwen3:0.6b`. To configure another model, copy the example
+environment file:
 
-### 2. Optionally configure the model
-
-The project works without a `.env` file and defaults to `qwen3:0.6b`.
-
-On macOS, Linux, WSL, or Git Bash:
+macOS, Linux, WSL, or Git Bash:
 
 ```sh
 cp .env.example .env
 ```
 
-On PowerShell:
+PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Edit `.env` if a different Ollama model is wanted:
+Then set a valid Ollama model name in `.env`:
 
 ```dotenv
 OLLAMA_MODEL=qwen3:0.6b
 ```
 
-The model name is passed to both `ollama-pull` and `rag`. The model must be
-available from the [Ollama model library](https://ollama.com/library).
+Larger models generally require more memory, disk space, and response time.
 
-### 3. Validate the Compose configuration
+### 3. Start the application
 
-```sh
-docker compose config
-```
-
-This resolves environment variables and checks that `compose.yaml` is valid.
-
-### 4. Build and start the stack
-
-Foreground mode, recommended for the first run:
+For the first run, foreground mode makes the download progress easy to see:
 
 ```sh
 docker compose up --build
 ```
 
-Detached/background mode:
+To run it in the background instead:
 
 ```sh
 docker compose up --build -d
 ```
 
-The first run is slower because it downloads:
+Compose starts four services:
 
-- Base Docker images
-- Python dependencies
-- `sentence-transformers/all-MiniLM-L6-v2`
-- The configured Ollama language model
+| Service | Purpose |
+| --- | --- |
+| `web` | Serves the chat UI and proxies `/api/*` to FastAPI |
+| `rag` | Extracts and retrieves PDF content and exposes the API |
+| `ollama` | Runs the local language model server |
+| `ollama-pull` | Downloads the configured Ollama model once, then exits |
 
-Downloaded Ollama and Hugging Face models are cached in named volumes, so
-later starts are faster.
+The first start can take several minutes. The Ollama model is downloaded before
+the RAG service starts, and the embedding model is downloaded when the first
+question is processed. Both model caches are preserved in Docker volumes.
 
-### 5. Open the application
+### 4. Open and use the chat
 
-Open:
+Open [http://localhost:8080](http://localhost:8080), wait for the status badge
+to show `RAG online`, and ask a question whose answer should be in the PDF.
 
-```text
-http://localhost:8080
-```
+The first question may be slower while the embedding model is downloaded and
+the first index is built. Expand the retrieved-sources section under an answer
+to inspect the passages sent to Ollama.
 
-The status badge should change to `RAG online` after the backend health check
-succeeds.
+### 5. Stop the application
 
-### 6. Stop the application
-
-If Compose is running in the foreground, press `Ctrl+C`, then run:
-
-```sh
-docker compose down
-```
-
-If Compose is running in the background:
+If it is running in the foreground, press `Ctrl+C`. Then run:
 
 ```sh
 docker compose down
 ```
 
-This removes the containers and project network but preserves downloaded
-models.
+This removes the containers and network but keeps downloaded models. Avoid
+`docker compose down --volumes` unless the model caches should also be deleted.
 
-## Verify the API
+## Use a different PDF
 
-All public API requests go through Nginx on port `8080`.
+The current implementation reads one PDF from `resources/file1.pdf`. There is
+no upload screen yet, so select the document before building the RAG image.
 
-### Health check
+### Option A: replace the default file
+
+Copy a new PDF over `resources/file1.pdf`.
 
 macOS, Linux, WSL, or Git Bash:
+
+```sh
+cp /path/to/your-document.pdf resources/file1.pdf
+```
+
+PowerShell:
+
+```powershell
+Copy-Item C:\path\to\your-document.pdf resources\file1.pdf
+```
+
+Rebuild the backend so Docker copies the new file into the image:
+
+```sh
+docker compose up -d --build rag
+```
+
+If the stack is not running, start the complete application instead:
+
+```sh
+docker compose up --build
+```
+
+The next question will use the replacement PDF.
+
+### Option B: keep the PDF's filename
+
+1. Put the PDF in `resources/`, for example `resources/employee-handbook.pdf`.
+2. Change `DEFAULT_PDF` in `read_pdf.py`:
+
+   ```python
+   DEFAULT_PDF = PROJECT_ROOT / "resources" / "employee-handbook.pdf"
+   ```
+
+3. Rebuild the backend:
+
+   ```sh
+   docker compose up -d --build rag
+   ```
+
+The path is resolved relative to the project, so it works both locally and at
+`/app/resources/...` inside the backend container.
+
+### Local-development behavior after a PDF change
+
+When FastAPI is running directly on the host rather than in Docker, the PDF is
+read from disk for every request. Replacing the configured file does not
+require an application rebuild or restart; ask the next question after the
+copy finishes.
+
+### PDF recommendations
+
+- Use a valid `.pdf` file; `convert_to_markdown` rejects other extensions.
+- Text-based PDFs produce better results than image-only scans. Scanned files
+  need OCR before this pipeline can retrieve their text reliably.
+- Keep headings in source documents when possible. Heading text is included in
+  the embedding input and can improve retrieval.
+- Ask specific questions using terminology that appears in the document.
+- Do not place sensitive documents in a deployment that untrusted users can
+  access. Retrieved text is returned by the API and displayed in the UI.
+
+## Use multiple PDFs or other knowledge resources
+
+The checked-in code supports one PDF at a fixed path. It does not currently
+include multi-file discovery, a file uploader, URL crawling, a database
+connector, or a persistent vector store.
+
+For a quick no-code workaround, combine the source material into one PDF and
+use that file as `resources/file1.pdf`.
+
+To extend the application properly, keep the retrieval pipeline's input
+contract simple: every source should become one or more LangChain `Document`
+chunks before `build_index(chunks)` is called.
+
+For multiple PDFs:
+
+1. Discover the files with `Path("resources").glob("*.pdf")`.
+2. Run `convert_to_markdown` and `chunk_markdown` for each file.
+3. Add the filename to each chunk's metadata, for example
+   `chunk.metadata["source"] = pdf_path.name`.
+4. Combine all chunks and build one FAISS index.
+5. Return the source metadata from the API if filename-level citations are
+   needed in the UI.
+
+For Markdown, text, web pages, object storage, or database records:
+
+1. Add an appropriate loader in `read_pdf.py` or a separate ingestion module.
+2. Normalize the loaded content to Markdown or plain text.
+3. Split it into chunks and attach metadata such as source name, URL, page,
+   record ID, or last-updated time.
+4. Pass the combined chunks through the existing `build_index` and `retrieve`
+   functions.
+
+`MarkItDown` can convert more than PDFs, but this project installs its PDF
+extras and explicitly validates `.pdf` input. Other file types therefore need
+both an appropriate dependency/loader and a change to the current validation
+logic.
+
+For a larger or frequently updated knowledge base, build the embeddings during
+an ingestion step and store them in a persistent vector database instead of
+re-extracting and re-embedding every source for every question.
+
+## Run the API locally for development
+
+Docker Compose is the easiest way to run the full web application. To run only
+the Python API on the host, install:
+
+- Python 3.12 or newer
+- [uv](https://docs.astral.sh/uv/)
+- [Ollama](https://ollama.com/) running on the host
+
+Install the locked dependencies and pull the default model:
+
+```sh
+uv sync --frozen
+ollama pull qwen3:0.6b
+```
+
+Start Ollama if the platform does not already run it as a background service,
+then start FastAPI:
+
+```sh
+uv run uvicorn simple_RAG:app --reload --host 127.0.0.1 --port 8000
+```
+
+By default, the local API calls Ollama at `http://127.0.0.1:11434`. Environment
+variables can override the model or server:
+
+```sh
+OLLAMA_MODEL=qwen3:0.6b \
+OLLAMA_BASE_URL=http://127.0.0.1:11434 \
+uv run uvicorn simple_RAG:app --reload --port 8000
+```
+
+This starts the API only; the checked-in Nginx frontend is wired for the Docker
+Compose network. Use `http://127.0.0.1:8000/docs` for FastAPI's interactive API
+documentation during local development.
+
+## API usage
+
+All public requests in the Compose setup go through Nginx on port `8080`.
+
+### Health check
 
 ```sh
 curl http://localhost:8080/api/health
@@ -348,421 +364,162 @@ Expected response:
 {"status":"healthy"}
 ```
 
-PowerShell:
-
-```powershell
-Invoke-RestMethod -Uri http://localhost:8080/api/health
-```
+This confirms the FastAPI process is responding. It does not validate the PDF,
+build the FAISS index, or make a test request to Ollama.
 
 ### Ask a question
-
-macOS, Linux, WSL, or Git Bash:
 
 ```sh
 curl -X POST http://localhost:8080/api/chat \
   -H 'Content-Type: application/json' \
-  -d '{"prompt":"How can I contact customer support?"}'
+  -d '{"prompt":"What does the document say about this topic?"}'
 ```
 
-PowerShell:
-
-```powershell
-$body = @{
-  prompt = "How can I contact customer support?"
-} | ConvertTo-Json
-
-Invoke-RestMethod `
-  -Uri http://localhost:8080/api/chat `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body $body
-```
-
-Example response:
+Example response shape:
 
 ```json
 {
-  "answer": "You can contact customer support by email or phone.",
+  "answer": "An answer generated from the retrieved context.",
   "sources": [
-    "Customer support: support@example.com or call 1-800-HELP",
-    "Our refund policy: 30 days, full refund with receipt."
+    "The first retrieved PDF passage...",
+    "The second retrieved PDF passage...",
+    "The third retrieved PDF passage..."
   ]
 }
 ```
 
-The exact answer can vary because it is generated by the language model.
+The exact answer and passages depend on the PDF and the selected model.
 
-## API contract
-
-### `GET /api/health`
-
-Reports whether the FastAPI process is ready:
-
-```json
-{
-  "status": "healthy"
-}
-```
-
-This endpoint confirms that FastAPI and the in-memory FAISS index loaded. It
-does not currently make a separate Ollama request.
-
-### `POST /api/chat`
-
-Request:
-
-```json
-{
-  "prompt": "What is the refund policy?"
-}
-```
-
-Validation rules:
-
-- `prompt` is required
-- `prompt` must be a string
-- Length must be between 1 and 4,000 characters
-
-Successful response:
-
-```json
-{
-  "answer": "The generated answer",
-  "sources": [
-    "Retrieved knowledge item one",
-    "Retrieved knowledge item two"
-  ]
-}
-```
-
-FastAPI returns status `422` when the request does not match the schema. It
-returns status `502` when the RAG service cannot obtain a usable response from
-Ollama.
-
-## How retrieval works
-
-At RAG service startup:
-
-1. The sample knowledge strings in `simple_RAG.py` are loaded.
-2. `all-MiniLM-L6-v2` converts each string into a 384-dimensional vector.
-3. The vectors are inserted into a FAISS `IndexFlatL2` index.
-
-For each question:
-
-1. The question is converted into an embedding with the same model.
-2. FAISS finds the two knowledge vectors with the smallest L2 distance.
-3. The matching knowledge strings are placed in the Ollama prompt as context.
-4. Ollama generates an answer from that context.
-5. FastAPI returns the generated answer and retrieved strings to the GUI.
-
-The index is in memory. It is rebuilt every time the `rag` service starts.
-
-## Current knowledge base
-
-The current version does not load PDFs or an external database. Its knowledge
-is the `documents` list in `simple_RAG.py`:
-
-```python
-documents = [
-    "Our refund policy: 30 days, full refund with receipt.",
-    "Shipping takes 3-5 business days for domestic orders.",
-    "We accept Visa, Mastercard, and PayPal.",
-    "Customer support: support@example.com or call 1-800-HELP"
-]
-```
-
-After changing the list, rebuild and recreate the RAG service:
-
-```sh
-docker compose up -d --build rag
-```
-
-PDF ingestion requires additional extraction, chunking, metadata, and indexing
-logic and is not part of the current checked-in implementation.
+The `prompt` field is required and must contain between 1 and 4,000 characters.
+Invalid requests return HTTP `422`; failures while contacting or decoding an
+Ollama response return HTTP `502`.
 
 ## Configuration
 
-| Variable | Default | Used by | Purpose |
-| --- | --- | --- | --- |
-| `OLLAMA_MODEL` | `qwen3:0.6b` | `ollama-pull`, `rag` | Ollama model to download and use |
-| `OLLAMA_BASE_URL` | `http://ollama:11434` in Compose | `rag` | Internal Ollama API address |
-| `HF_HOME` | `/home/app/.cache/huggingface` in Compose | `rag` | Hugging Face model-cache directory |
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OLLAMA_MODEL` | `qwen3:0.6b` | Ollama model downloaded and used for answers |
+| `OLLAMA_BASE_URL` | `http://ollama:11434` in Compose; `http://127.0.0.1:11434` otherwise | Ollama API address used by FastAPI |
+| `HF_HOME` | `/home/app/.cache/huggingface` in Compose | Embedding-model cache directory |
 
-Do not change `OLLAMA_BASE_URL` to `127.0.0.1` inside the RAG container.
-Container-local `127.0.0.1` refers to the RAG container itself, not to Ollama.
+Do not set `OLLAMA_BASE_URL` to `127.0.0.1` in the `rag` container. There,
+`127.0.0.1` refers to the RAG container itself; the Ollama service is available
+at `http://ollama:11434`.
 
-### Change the Ollama model
-
-Update `.env`:
-
-```dotenv
-OLLAMA_MODEL=another-model-name
-```
-
-Then recreate the affected services:
+After changing `OLLAMA_MODEL` in `.env`, recreate the relevant services:
 
 ```sh
-docker compose up -d --build ollama-pull rag web
+docker compose up -d ollama-pull
+docker compose up -d --build rag
 ```
 
-Monitor the download:
+Monitor the model download with:
 
 ```sh
 docker compose logs -f ollama-pull
 ```
 
-Larger models need more RAM, disk space, and generation time.
-
-## Common development commands
-
-Start or update everything:
+## Useful commands
 
 ```sh
-docker compose up -d --build
+# Show service state
+docker compose ps
+
+# Follow application logs
+docker compose logs -f web rag ollama ollama-pull
+
+# Rebuild the backend after Python or resource changes
+docker compose up -d --build rag
+
+# Rebuild the frontend after web changes
+docker compose up -d --build web
+
+# List locally cached Ollama models
+docker compose exec ollama ollama list
+
+# Validate the resolved Compose configuration
+docker compose config
 ```
 
-Show service state:
+## Troubleshooting
+
+### The first question is very slow
+
+The first request downloads the Sentence Transformer model if it is not cached,
+then converts the PDF, embeds all chunks, and builds the FAISS index. Follow the
+backend logs:
+
+```sh
+docker compose logs -f rag
+```
+
+Subsequent questions avoid the model download but still rebuild the document
+index with the current implementation.
+
+### The page does not open or says `RAG offline`
 
 ```sh
 docker compose ps
+docker compose logs web rag ollama-pull ollama
+curl http://localhost:8080/api/health
 ```
 
-Follow all logs:
+The web service waits for the RAG health check, and the RAG service waits for
+the Ollama model-pull job to finish.
 
-```sh
-docker compose logs -f
-```
+### A different PDF is not being used
 
-Follow selected services:
-
-```sh
-docker compose logs -f web rag ollama
-```
-
-Rebuild only the frontend:
-
-```sh
-docker compose up -d --build web
-```
-
-Rebuild only the RAG API:
+The PDF is copied into the backend image; it is not bind-mounted. Confirm the
+path in `read_pdf.py`, then rebuild the RAG image:
 
 ```sh
 docker compose up -d --build rag
 ```
 
-Restart a service without rebuilding:
+If Docker still reuses an unexpected layer, force a one-time clean rebuild:
 
 ```sh
-docker compose restart rag
+docker compose build --no-cache rag
+docker compose up -d rag
 ```
 
-Inspect the models stored by Ollama:
+### PDF extraction fails or returns poor context
 
-```sh
-docker compose exec ollama ollama list
-```
-
-Validate the Nginx configuration:
-
-```sh
-docker compose exec web nginx -t
-```
-
-Test connectivity from Nginx to FastAPI:
-
-```sh
-docker compose exec web wget -qO- http://rag:8000/api/health
-```
-
-## Persistent data
-
-Compose creates two named volumes:
-
-| Volume | Contents |
-| --- | --- |
-| `ollama_data` | Downloaded Ollama models |
-| `huggingface_cache` | Downloaded Sentence Transformer files |
-
-Normal shutdown preserves both:
-
-```sh
-docker compose down
-```
-
-To deliberately remove containers and downloaded model data:
-
-```sh
-docker compose down --volumes
-```
-
-The `--volumes` operation is destructive. The next start will download the
-models again.
-
-## CPU and GPU behavior
-
-The checked-in Compose configuration is CPU-only and does not request a GPU.
-This provides the most portable default across macOS, Windows, and Linux.
-
-- macOS Docker containers do not use the Apple GPU for this Ollama service.
-- Windows Docker GPU acceleration requires a supported GPU and the WSL 2
-  backend.
-- Linux NVIDIA or AMD acceleration requires the appropriate host drivers,
-  container runtime configuration, and Compose device settings.
-
-See the official [Ollama Docker documentation](https://docs.ollama.com/docker)
-before modifying the Compose service for GPU access.
-
-## Troubleshooting
-
-### The page does not open
-
-Check service status:
-
-```sh
-docker compose ps
-```
-
-Check logs:
-
-```sh
-docker compose logs web rag ollama-pull ollama
-```
-
-The `web` service will not start until `rag` passes its health check.
-
-### Port 8080 is already in use
-
-Change the host-side port in `compose.yaml`:
-
-```yaml
-web:
-  ports:
-    - "8081:80"
-```
-
-Recreate the service and open `http://localhost:8081`:
-
-```sh
-docker compose up -d web
-```
-
-### The GUI reports `RAG offline`
-
-Check the API through Nginx:
-
-```sh
-curl http://localhost:8080/api/health
-```
-
-Then inspect the backend:
-
-```sh
-docker compose logs rag
-docker compose ps
-```
-
-On Windows PowerShell, use:
-
-```powershell
-Invoke-RestMethod -Uri http://localhost:8080/api/health
-```
-
-### Nginx returns `502 Bad Gateway`
-
-Test the internal connection:
-
-```sh
-docker compose exec web wget -qO- http://rag:8000/api/health
-```
-
-If it fails, inspect the RAG logs:
-
-```sh
-docker compose logs rag
-```
-
-### The first startup takes a long time
-
-This is normally caused by image or model downloads. Follow the setup logs:
-
-```sh
-docker compose logs -f ollama-pull rag
-```
-
-Do not remove the named volumes if the downloads should be reused.
+- Confirm the configured file exists and has a `.pdf` extension.
+- Try extracting text from the PDF with another viewer to determine whether it
+  contains selectable text.
+- Run OCR on image-only scans before using them.
+- Inspect `docker compose logs rag` for the MarkItDown error.
 
 ### The model download fails
 
-Check the Ollama and pull-service logs:
+Confirm the model name in `.env`, Docker's internet access, and the pull logs:
 
 ```sh
 docker compose logs ollama ollama-pull
-```
-
-Verify that Docker has internet access and that the model name in `.env` is
-valid.
-
-Retry the one-time pull service:
-
-```sh
 docker compose up ollama-pull
 ```
 
-### A request is slow
+### Port 8080 is already in use
 
-Generation speed depends on the selected model, available CPU and memory, and
-platform. The Nginx configuration allows up to 300 seconds for a RAG response.
-Try the default small model first before choosing a larger model.
+Change the host side of the mapping in `compose.yaml`, for example from
+`"8080:80"` to `"8081:80"`, recreate `web`, and open
+`http://localhost:8081`.
 
-### The frontend still shows old CSS or JavaScript
+## Current limitations
 
-Rebuild the web image:
+- One PDF at a fixed path
+- No browser upload or knowledge-source management
+- Index rebuilt in memory for every request
+- No conversation history; each request is independent
+- Returned sources contain chunk text, not filenames or page-number citations
+- CPU-only Compose configuration
+- No authentication, authorization, rate limiting, or HTTPS
 
-```sh
-docker compose up -d --build web
-```
-
-Then force-refresh the browser:
-
-- macOS: `Command+Shift+R`
-- Windows/Linux: `Ctrl+Shift+R`
-
-### Docker commands require permission on Linux
-
-Either prefix the commands with `sudo`, or follow Docker's
-[Linux post-installation instructions](https://docs.docker.com/engine/install/linux-postinstall/)
-to configure non-root access. Membership in the Docker group grants
-root-equivalent privileges and should be treated accordingly.
-
-### Start again from a clean container state
-
-Recreate containers without deleting model caches:
-
-```sh
-docker compose down
-docker compose up --build
-```
-
-Only if cached models should also be deleted:
-
-```sh
-docker compose down --volumes
-docker compose up --build
-```
-
-## Security notes
-
-- Only port `8080` is published by default.
-- Ollama and FastAPI are reachable only on the internal Docker network.
-- Nginx limits request bodies to 1 MB.
-- FastAPI limits prompts to 4,000 characters.
-- The application does not currently provide authentication or rate limiting.
-- Do not expose this development configuration directly to the public
-  internet. Add HTTPS, authentication, rate limiting, and appropriate network
-  controls before a public deployment.
+This is a learning and local-development project. Add persistent indexing,
+source-aware citations, access controls, and operational safeguards before
+using it as a public or production service.
 
 ## License
 
-No license file is currently included. Add a license before redistributing the
-project if redistribution terms need to be explicit.
+No license file is currently included.
