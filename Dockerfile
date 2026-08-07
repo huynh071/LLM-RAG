@@ -23,7 +23,8 @@ COPY pyproject.toml uv.lock README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
-COPY --chown=app:app simple_RAG.py ./
+COPY --chown=app:app simple_RAG.py read_pdf.py ./
+COPY --chown=app:app resources ./resources
 
 USER app
 
